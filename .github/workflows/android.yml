@@ -33,9 +33,7 @@ jobs:
         run: npm install
 
       - name: Prepare web files
-        run: |
-          mkdir -p www
-          cp index.html www/index.html
+        run: mkdir -p www && cp index.html www/index.html
 
       - name: Add Android platform
         run: npx cap add android
@@ -47,15 +45,11 @@ jobs:
         run: npx cap sync android
 
       - name: Build APK
-        run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug
+        run: chmod +x android/gradlew && cd android && ./gradlew assembleDebug
 
       - name: Build AAB
-        run: |
-          cd android
-          ./gradlew bundleDebug
+        run: ./gradlew bundleDebug
+        working-directory: android
 
       - name: Upload APK and AAB
         uses: actions/upload-artifact@v4
