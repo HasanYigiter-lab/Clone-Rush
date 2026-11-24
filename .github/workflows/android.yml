@@ -82,6 +82,30 @@ jobs:
 
       - name: Sync Android
         run: npx cap sync android
+        
+      - name: Configure Maven Central mirror
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/build.gradle")
+          content = path.read_text()
+
+          mirror = '''maven {
+                      url "https://maven-central.storage-download.googleapis.com/maven2/"
+                  }
+                  '''
+
+          if "maven-central.storage-download.googleapis.com" not in content:
+              content = content.replace(
+                  "mavenCentral()",
+                  mirror + "mavenCentral()"
+              )
+
+          path.write_text(content)
+          print("Maven Central mirror configured.")
+          PY
+
 
       - name: Decode signing key
         env:
