@@ -1,0 +1,238 @@
+name: Gem Rush Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Prepare web files and bundle AdMob bridge
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
+          npx esbuild admob-bridge.js --bundle --format=iife --outfile=www/admob-bridge.js
+
+      # ===== GEÇİCİ TEŞHİS ADIMI (beyaz ekran çözülünce bu adımı sil) =====
+      - name: Inject temporary diagnostic overlay
+        run: |
+          cp diag.js www/diag.js
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("www/index.html")
+          s = p.read_text(encoding="utf-8")
+          tag = '<script src="diag.js"></script>'
+
+          if tag not in s:
+              charset = '<meta charset="utf-8">'
+              if charset in s:
+                  s = s.replace(charset, charset + tag, 1)
+              elif "<head>" in s:
+                  s = s.replace("<head>", "<head>" + tag, 1)
+              else:
+                  raise SystemExit("head/charset not found in index.html")
+
+          p.write_text(s, encoding="utf-8")
+          print("Diagnostic overlay injected.")
+          PY
+      # ===== TEŞHİS ADIMI SONU =====
+
+      - name: Verify Web Files
+        run: |
+          echo "=== WWW FILES ==="
+          find www -maxdepth 4 -type f
+          echo "=== INDEX CHECK ==="
+          test -s www/index.html
+          echo "index.html OK"
+          echo "=== ADMOB CHECK ==="
+          test -s www/admob-bridge.js
+          echo "admob-bridge.js OK"
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Generate App Icons and Splash
+        run: npx capacitor-assets generate --android
+
+      - name: Configure AdMob App ID
+        run: |
+          mkdir -p android/app/src/main/res/values
+
+          cat > android/app/src/main/res/values/admob.xml <<'EOF'
+          <resources>
+              <string name="admob_app_id">ca-app-pub-3173758070343843~8176795807</string>
+          </resources>
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          content = path.read_text()
+
+          marker = 'com.google.android.gms.ads.APPLICATION_ID'
+
+          if marker not in content:
+              entry = '''        <meta-data
+              android:name="com.google.android.gms.ads.APPLICATION_ID"
+              android:value="@string/admob_app_id" />
+          '''
+
+              if "</application>" not in content:
+                  raise SystemExit("AndroidManifest.xml application tag not found")
+
+              content = content.replace(
+                  "</application>",
+                  entry + "    </application>",
+                  1
+              )
+
+          path.write_text(content)
+          print("AdMob App ID configured.")
+          PY
+
+      - name: Sync Android
+        run: npx cap sync android
+
+      # ===== GEÇİCİ TEŞHİS ADIMI: web dosyaları APK içine gerçekten girdi mi? =====
+      - name: Verify files inside Android project
+        run: |
+          echo "=== ASSETS/PUBLIC ==="
+          ls -la android/app/src/main/assets/public
+          echo "=== CAPACITOR CONFIG IN ANDROID ==="
+          cat android/app/src/main/assets/capacitor.config.json
+          echo "=== DIAG TAG IN INDEX ==="
+          grep -c 'diag.js' android/app/src/main/assets/public/index.html
+          echo "=== MANIFEST (AdMob + permissions) ==="
+          grep -n -E "APPLICATION_ID|INTERNET|ACCESS_NETWORK_STATE|MainActivity" android/app/src/main/AndroidManifest.xml
+      # ===== TEŞHİS ADIMI SONU =====
+
+      - name: Configure Maven Central mirror
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/build.gradle")
+          content = path.read_text()
+
+          mirror = '''maven {
+                      url "https://maven-central.storage-download.googleapis.com/maven2/"
+                  }
+                  '''
+
+          if "maven-central.storage-download.googleapis.com" not in content:
+              if "mavenCentral()" not in content:
+                  raise SystemExit("mavenCentral() not found in android/build.gradle")
+
+              content = content.replace(
+                  "mavenCentral()",
+                  mirror + "mavenCentral()"
+              )
+
+          path.write_text(content)
+          print("Maven Central mirror configured.")
+          PY
+
+      - name: Decode signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 secret is missing"
+            exit 1
+          fi
+
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/gem-rush-upload.jks"
+
+      - name: Configure Android release signing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle")
+
+          if not path.exists():
+              raise SystemExit("android/app/build.gradle not found")
+
+          content = path.read_text()
+          marker = "    buildTypes {"
+
+          if marker not in content:
+              raise SystemExit("buildTypes block not found")
+
+          signing = '''    signingConfigs {
+              release {
+                  storeFile file(System.getenv("KEYSTORE_FILE"))
+                  storePassword System.getenv("KEYSTORE_PASSWORD")
+                  keyAlias System.getenv("KEY_ALIAS")
+                  keyPassword System.getenv("KEYSTORE_PASSWORD")
+              }
+          }
+
+          '''
+
+          if "signingConfigs {" not in content:
+              content = content.replace(marker, signing + marker, 1)
+
+          start = content.index(marker)
+          release = content.find("        release {", start)
+
+          if release == -1:
+              raise SystemExit("release build type not found")
+
+          insert_at = release + len("        release {")
+
+          if "signingConfig signingConfigs.release" not in content[insert_at:insert_at+200]:
+              content = (
+                  content[:insert_at]
+                  + "\n            signingConfig signingConfigs.release"
+                  + content[insert_at:]
+              )
+
+          path.write_text(content)
+          print("Release signing configured successfully.")
+          PY
+
+      - name: Build signed APK and AAB
+        working-directory: android
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/gem-rush-upload.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease bundleRelease
+
+      - name: Upload signed APK and AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gem-Rush-Signed-Release
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          retention-days: 7
