@@ -37,9 +37,8 @@ jobs:
           mkdir -p www
           cp index.html www/index.html
           npx esbuild admob-bridge.js --bundle --format=iife --outfile=www/admob-bridge.js
-
       - name: Add Android platform
-        run: npx cap add android --config capacitor.config.json
+        run: npx cap add android
 
       - name: Generate App Icons and Splash
         run: npx capacitor-assets generate --android
@@ -82,7 +81,7 @@ jobs:
           PY
 
       - name: Sync Android
-        run: npx cap sync android --config capacitor.config.json
+        run: npx cap sync android
 
       - name: Decode signing key
         env:
