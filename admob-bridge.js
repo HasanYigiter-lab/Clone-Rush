@@ -1,10 +1,10 @@
 import { Capacitor } from '@capacitor/core';
-import { AdMob, AdmobConsentStatus, BannerAdPosition, BannerAdSize } from '@capacitor-community/admob';
+import { AdMob, AdmobConsentStatus, BannerAdPosition, BannerAdSize, BannerAdPluginEvents, InterstitialAdPluginEvents, RewardAdPluginEvents } from '@capacitor-community/admob';
 
 // Keep Google demo ad units enabled until all formats are verified on a real device.
 const TEST_MODE = true;
 const TEST_AD_UNITS = {
-  banner: 'ca-app-pub-3940256099942544/6300978111',
+  banner: 'ca-app-pub-3940256099942544/9214589741',
   interstitial: 'ca-app-pub-3940256099942544/1033173712',
   rewarded: 'ca-app-pub-3940256099942544/5224354917',
 };
@@ -31,6 +31,34 @@ let rewardedBusy = false;
 let currentScreen = 'menu';
 let lastError = '';
 let lastStatus = 'Not initialized';
+let listenersInstalled = false;
+const recentEvents = [];
+function recordEvent(name, detail = '') {
+  const item = { time: new Date().toLocaleTimeString(), name, detail: detail ? (typeof detail === 'string' ? detail : JSON.stringify(detail)) : '' };
+  recentEvents.push(item);
+  if (recentEvents.length > 20) recentEvents.shift();
+  lastStatus = name;
+  log(name, detail);
+}
+async function installAdListeners() {
+  if (listenersInstalled) return;
+  listenersInstalled = true;
+  const registrations = [
+    [BannerAdPluginEvents.Loaded, () => recordEvent('Banner loaded')],
+    [BannerAdPluginEvents.FailedToLoad, e => { lastError = 'Banner failed to load: ' + (e?.message || JSON.stringify(e)); recordEvent('Banner failed to load', e); }],
+    [BannerAdPluginEvents.SizeChanged, s => recordEvent('Banner size changed', s)],
+    [InterstitialAdPluginEvents.Loaded, i => recordEvent('Interstitial loaded', i)],
+    [InterstitialAdPluginEvents.FailedToLoad, e => { lastError = 'Interstitial failed to load: ' + (e?.message || JSON.stringify(e)); recordEvent('Interstitial failed to load', e); }],
+    [InterstitialAdPluginEvents.FailedToShow, e => { lastError = 'Interstitial failed to show: ' + (e?.message || JSON.stringify(e)); recordEvent('Interstitial failed to show', e); }],
+    [RewardAdPluginEvents.Loaded, i => recordEvent('Rewarded loaded', i)],
+    [RewardAdPluginEvents.FailedToLoad, e => { lastError = 'Rewarded failed to load: ' + (e?.message || JSON.stringify(e)); recordEvent('Rewarded failed to load', e); }],
+    [RewardAdPluginEvents.FailedToShow, e => { lastError = 'Rewarded failed to show: ' + (e?.message || JSON.stringify(e)); recordEvent('Rewarded failed to show', e); }],
+  ];
+  for (const [eventName, callback] of registrations) {
+    try { await AdMob.addListener(eventName, callback); }
+    catch (e) { log('Listener registration failed:', eventName, e); }
+  }
+}
 
 const isNative = () => Capacitor.isNativePlatform();
 const isBannerScreen = screen => ['menu', 'shop', 'pg', 'end'].includes(screen);
@@ -158,6 +186,7 @@ async function init() {
         return false;
       }
 
+      await installAdListeners();
       lastStatus = 'Initializing Google Mobile Ads SDK';
       await AdMob.initialize();
       initialized = true;
@@ -269,6 +298,8 @@ window.GemRushAdMob = {
     interstitialReady,
     interstitialLoading: !!interstitialLoadPromise,
     currentScreen,
+    recentEvents: recentEvents.slice(-12),
+    listenersInstalled,
   }),
   privacyOptionsRequired: () => privacyOptionsRequired,
   showPrivacyOptionsForm: async () => {
