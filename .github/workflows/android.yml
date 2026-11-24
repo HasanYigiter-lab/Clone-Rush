@@ -1,3 +1,4 @@
+
 name: Gem Rush Android Build
 
 on:
@@ -36,39 +37,6 @@ jobs:
           mkdir -p www
           cp index.html www/index.html
           npx esbuild admob-bridge.js --bundle --format=iife --outfile=www/admob-bridge.js
-
-      # ===== GEÇİCİ TEŞHİS ADIMI (beyaz ekran çözülünce bu adımı sil) =====
-      - name: Inject temporary diagnostic overlay
-        run: |
-          cp diag.js www/diag.js
-          echo "=== www/index.html BOYUT (bayt) ==="
-          wc -c www/index.html
-          echo "=== www/index.html ILK 400 BAYT ==="
-          head -c 400 www/index.html | cat -v
-          echo
-          echo "=== SHA256 ==="
-          sha256sum www/index.html
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-
-          p = Path("www/index.html")
-          s = p.read_bytes().decode("utf-8", errors="replace")
-          tag = '<script src="diag.js"></script>'
-
-          if tag in s:
-              print("Tag already present.")
-          else:
-              m = re.search(r"<head[^>]*>", s, re.I) or re.search(r"<html[^>]*>", s, re.I)
-              if m:
-                  s = s[:m.end()] + tag + s[m.end():]
-                  print("Injected after:", m.group(0))
-              else:
-                  s = tag + s
-                  print("No head/html tag found; tag prepended to file.")
-              p.write_text(s, encoding="utf-8")
-          PY
-      # ===== TEŞHİS ADIMI SONU =====
 
       - name: Verify Web Files
         run: |
@@ -110,7 +78,6 @@ jobs:
               android:name="com.google.android.gms.ads.APPLICATION_ID"
               android:value="@string/admob_app_id" />
           '''
-
               if "</application>" not in content:
                   raise SystemExit("AndroidManifest.xml application tag not found")
 
@@ -126,19 +93,6 @@ jobs:
 
       - name: Sync Android
         run: npx cap sync android
-
-      # ===== GEÇİCİ TEŞHİS ADIMI: web dosyaları APK içine gerçekten girdi mi? =====
-      - name: Verify files inside Android project
-        run: |
-          echo "=== ASSETS/PUBLIC ==="
-          ls -la android/app/src/main/assets/public
-          echo "=== CAPACITOR CONFIG IN ANDROID ==="
-          cat android/app/src/main/assets/capacitor.config.json
-          echo "=== DIAG TAG IN INDEX ==="
-          grep -c 'diag.js' android/app/src/main/assets/public/index.html
-          echo "=== MANIFEST (AdMob + permissions) ==="
-          grep -n -E "APPLICATION_ID|INTERNET|ACCESS_NETWORK_STATE|MainActivity" android/app/src/main/AndroidManifest.xml
-      # ===== TEŞHİS ADIMI SONU =====
 
       - name: Configure Maven Central mirror
         run: |
