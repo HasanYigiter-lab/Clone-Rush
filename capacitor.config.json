@@ -1,6 +1,6 @@
 {
-  "appId": "com.labstudio.clonerush",
-  "appName": "Clone Rush",
+  "appId": "com.labstudio.gemrush",
+  "appName": "Gem Rush",
   "webDir": "www",
   "bundledWebRuntime": false,
   "server": {
