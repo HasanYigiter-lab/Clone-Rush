@@ -6,107 +6,124 @@ import {
   BannerAdSize,
 } from '@capacitor-community/admob';
 
-// Keep true while testing. Change to false only after the test build is verified.
+// Keep test ads enabled until all three formats are confirmed on a real device.
 const TEST_MODE = true;
-
-const AD_UNITS = {
+const LIVE_AD_UNITS = {
   banner: 'ca-app-pub-3173758070343843/8727460148',
   interstitial: 'ca-app-pub-3173758070343843/6264627536',
   rewarded: 'ca-app-pub-3173758070343843/7985224111',
 };
+// Google's official Android demo units. These reliably return test creatives.
+const TEST_AD_UNITS = {
+  banner: 'ca-app-pub-3940256099942544/6300978111',
+  interstitial: 'ca-app-pub-3940256099942544/1033173712',
+  rewarded: 'ca-app-pub-3940256099942544/5224354917',
+};
+const AD_UNITS = TEST_MODE ? TEST_AD_UNITS : LIVE_AD_UNITS;
 
 let initialized = false;
 let consentAllowsAds = false;
 let privacyOptionsRequired = false;
 let bannerVisible = false;
 let bannerBusy = false;
+let bannerWanted = false;
 let interstitialReady = false;
 let currentScreen = 'menu';
 let interstitialBusy = false;
 let rewardedBusy = false;
+let lastError = '';
+let consentSnapshot = null;
 
 const isNative = () => Capacitor.isNativePlatform();
-const isBannerScreen = (screen) =>
-  ['menu', 'shop', 'pg', 'end'].includes(screen);
-
+const isBannerScreen = screen => ['menu', 'shop', 'pg', 'end'].includes(screen);
 function setBannerClass(visible) {
   const app = document.getElementById('app');
   if (app) app.classList.toggle('ad-banner-visible', !!visible);
+}
+function reportError(where, error) {
+  lastError = `${where}: ${error?.message || error || 'unknown error'}`;
+  console.error('[Gem Rush AdMob]', lastError, error);
 }
 
 async function loadInterstitial() {
   if (!initialized || !consentAllowsAds) return false;
   try {
-    await AdMob.prepareInterstitial({
-      adId: AD_UNITS.interstitial,
-      isTesting: TEST_MODE,
-      immersiveMode: true,
-    });
+    await AdMob.prepareInterstitial({ adId: AD_UNITS.interstitial, isTesting: TEST_MODE, immersiveMode: true });
     interstitialReady = true;
+    console.info('[Gem Rush AdMob] Interstitial loaded');
     return true;
   } catch (error) {
     interstitialReady = false;
-    console.warn('[Gem Rush] Interstitial load failed:', error);
+    reportError('Interstitial load failed', error);
     return false;
   }
 }
 
 async function init() {
-  if (!isNative()) return false;
+  if (!isNative()) {
+    lastError = 'AdMob only works in the native Android/iOS app, not a browser preview.';
+    console.warn('[Gem Rush AdMob]', lastError);
+    return false;
+  }
   if (initialized) return true;
-
   try {
     let consent = await AdMob.requestConsentInfo();
-    if (
-      consent.isConsentFormAvailable &&
-      consent.status === AdmobConsentStatus.REQUIRED
-    ) {
+    if (consent.isConsentFormAvailable && consent.status === AdmobConsentStatus.REQUIRED) {
       consent = await AdMob.showConsentForm();
     }
-
+    consentSnapshot = consent;
     consentAllowsAds = !!consent.canRequestAds;
     privacyOptionsRequired = consent.privacyOptionsRequirementStatus === 'REQUIRED';
-    if (!consentAllowsAds) return false;
-
+    console.info('[Gem Rush AdMob] Consent result:', consent);
+    if (!consentAllowsAds) {
+      lastError = 'Consent SDK says canRequestAds=false; no ad request was sent.';
+      console.warn('[Gem Rush AdMob]', lastError);
+      return false;
+    }
     await AdMob.initialize();
     initialized = true;
-
-    // Preload a full-screen ad early; never block gameplay on an ad load.
+    console.info('[Gem Rush AdMob] SDK initialized; test mode:', TEST_MODE);
     void loadInterstitial();
+    // Apply the screen selected by the game while initialization was running.
+    void setBanner(isBannerScreen(currentScreen));
     return true;
   } catch (error) {
-    console.warn('[Gem Rush] AdMob initialization failed:', error);
     initialized = false;
     consentAllowsAds = false;
+    reportError('Initialization failed', error);
     return false;
   }
 }
 
 async function setBanner(visible) {
+  bannerWanted = !!visible;
   if (!initialized || !consentAllowsAds || bannerBusy) return;
   bannerBusy = true;
   try {
-    if (visible && !bannerVisible) {
-      await AdMob.showBanner({
-        adId: AD_UNITS.banner,
-        adSize: BannerAdSize.ADAPTIVE_BANNER,
-        position: BannerAdPosition.BOTTOM_CENTER,
-        margin: 0,
-        isTesting: TEST_MODE,
-      });
-      bannerVisible = true;
-      setBannerClass(true);
-    } else if (!visible && bannerVisible) {
-      await AdMob.hideBanner();
-      bannerVisible = false;
-      setBannerClass(false);
+    while (initialized && consentAllowsAds && bannerVisible !== bannerWanted) {
+      const target = bannerWanted;
+      if (target) {
+        await AdMob.showBanner({
+          adId: AD_UNITS.banner,
+          adSize: BannerAdSize.ADAPTIVE_BANNER,
+          position: BannerAdPosition.BOTTOM_CENTER,
+          margin: 0,
+          isTesting: TEST_MODE,
+        });
+      } else {
+        await AdMob.hideBanner();
+      }
+      bannerVisible = target;
+      setBannerClass(target);
+      console.info('[Gem Rush AdMob] Banner state:', target ? 'shown' : 'hidden');
     }
   } catch (error) {
-    console.warn('[Gem Rush] Banner operation failed:', error);
     bannerVisible = false;
     setBannerClass(false);
+    reportError('Banner operation failed', error);
   } finally {
     bannerBusy = false;
+    if (initialized && consentAllowsAds && bannerVisible !== bannerWanted) void setBanner(bannerWanted);
   }
 }
 
@@ -127,7 +144,7 @@ async function showInterstitial() {
     return true;
   } catch (error) {
     interstitialReady = false;
-    console.warn('[Gem Rush] Interstitial show failed:', error);
+    reportError('Interstitial show failed', error);
     void loadInterstitial();
     return false;
   } finally {
@@ -141,16 +158,11 @@ async function showRewarded() {
   rewardedBusy = true;
   try {
     await setBanner(false);
-    await AdMob.prepareRewardVideoAd({
-      adId: AD_UNITS.rewarded,
-      isTesting: TEST_MODE,
-      immersiveMode: true,
-    });
+    await AdMob.prepareRewardVideoAd({ adId: AD_UNITS.rewarded, isTesting: TEST_MODE, immersiveMode: true });
     const reward = await AdMob.showRewardVideoAd();
-    // The plugin resolves this promise only after the reward event is earned.
     return !!reward;
   } catch (error) {
-    console.warn('[Gem Rush] Rewarded ad unavailable or not completed:', error);
+    reportError('Rewarded ad failed', error);
     return false;
   } finally {
     rewardedBusy = false;
@@ -166,9 +178,10 @@ window.GemRushAdMob = {
   showInterstitial,
   showRewarded,
   privacyOptionsRequired: () => privacyOptionsRequired,
+  getDebugState: () => ({ native: isNative(), initialized, consentAllowsAds, consent: consentSnapshot, testMode: TEST_MODE, adUnits: AD_UNITS, lastError }),
   showPrivacyOptionsForm: async () => {
     if (!initialized || !privacyOptionsRequired) return false;
     try { await AdMob.showPrivacyOptionsForm(); return true; }
-    catch (error) { console.warn('[Gem Rush] Privacy options form failed:', error); return false; }
+    catch (error) { reportError('Privacy options form failed', error); return false; }
   },
 };
