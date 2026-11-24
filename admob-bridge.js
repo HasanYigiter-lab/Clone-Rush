@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { AdMob, AdmobConsentStatus, BannerAdPosition, BannerAdSize } from '@capacitor-community/admob';
 
-// Google demo units for Android. Keep TEST_MODE true until all formats are verified.
+// Keep Google demo ad units enabled until all formats are verified on a real device.
 const TEST_MODE = true;
 const TEST_AD_UNITS = {
   banner: 'ca-app-pub-3940256099942544/6300978111',
@@ -23,8 +23,9 @@ let privacyOptionsRequired = false;
 let consentSnapshot = null;
 let bannerVisible = false;
 let bannerWanted = false;
-let bannerBusy = false;
+let bannerQueue = Promise.resolve();
 let interstitialReady = false;
+let interstitialLoadPromise = null;
 let interstitialBusy = false;
 let rewardedBusy = false;
 let currentScreen = 'menu';
@@ -33,12 +34,17 @@ let lastStatus = 'Not initialized';
 
 const isNative = () => Capacitor.isNativePlatform();
 const isBannerScreen = screen => ['menu', 'shop', 'pg', 'end'].includes(screen);
-function log(...args) { console.info('[Gem Rush AdMob]', ...args); }
+
+function log(...args) {
+  console.info('[Gem Rush AdMob]', ...args);
+}
+
 function fail(where, error) {
   lastError = `${where}: ${error?.message || error || 'Unknown error'}`;
   lastStatus = 'ERROR';
   console.error('[Gem Rush AdMob]', lastError, error);
 }
+
 function setBannerClass(visible) {
   const app = document.getElementById('app');
   if (app) app.classList.toggle('ad-banner-visible', !!visible);
@@ -46,51 +52,74 @@ function setBannerClass(visible) {
 
 async function loadInterstitial() {
   if (!initialized || !consentAllowsAds) return false;
-  try {
-    await AdMob.prepareInterstitial({ adId: AD_UNITS.interstitial, isTesting: TEST_MODE, immersiveMode: true });
-    interstitialReady = true;
-    log('Interstitial test ad loaded');
-    return true;
-  } catch (error) {
-    interstitialReady = false;
-    fail('Interstitial load failed', error);
-    return false;
-  }
+  if (interstitialReady) return true;
+  if (interstitialLoadPromise) return interstitialLoadPromise;
+
+  interstitialLoadPromise = (async () => {
+    try {
+      lastStatus = 'Loading interstitial';
+      await AdMob.prepareInterstitial({
+        adId: AD_UNITS.interstitial,
+        isTesting: TEST_MODE,
+        immersiveMode: true,
+      });
+      interstitialReady = true;
+      lastStatus = 'Interstitial loaded';
+      log('Interstitial loaded');
+      return true;
+    } catch (error) {
+      interstitialReady = false;
+      fail('Interstitial load failed', error);
+      return false;
+    } finally {
+      interstitialLoadPromise = null;
+    }
+  })();
+
+  return interstitialLoadPromise;
 }
 
-async function setBanner(visible) {
+// Serialize native banner operations. This prevents a show request racing a hide request.
+function setBanner(visible) {
   bannerWanted = !!visible;
-  if (!initialized || !consentAllowsAds || bannerBusy) return false;
-  bannerBusy = true;
-  try {
-    while (initialized && consentAllowsAds && bannerVisible !== bannerWanted) {
+  if (!initialized || !consentAllowsAds) return Promise.resolve(false);
+
+  const operation = async () => {
+    if (!initialized || !consentAllowsAds) return false;
+
+    while (bannerVisible !== bannerWanted) {
       const target = bannerWanted;
-      if (target) {
-        await AdMob.showBanner({
-          adId: AD_UNITS.banner,
-          adSize: BannerAdSize.ADAPTIVE_BANNER,
-          position: BannerAdPosition.BOTTOM_CENTER,
-          margin: 0,
-          isTesting: TEST_MODE,
-        });
-      } else {
-        await AdMob.hideBanner();
+      try {
+        if (target) {
+          await AdMob.showBanner({
+            adId: AD_UNITS.banner,
+            adSize: BannerAdSize.ADAPTIVE_BANNER,
+            position: BannerAdPosition.BOTTOM_CENTER,
+            margin: 0,
+            isTesting: TEST_MODE,
+          });
+        } else {
+          await AdMob.hideBanner();
+        }
+
+        bannerVisible = target;
+        setBannerClass(target);
+        lastStatus = target ? 'Banner show requested' : 'Banner hidden';
+        log(lastStatus);
+      } catch (error) {
+        bannerVisible = false;
+        setBannerClass(false);
+        fail('Banner operation failed', error);
+        // Do not immediately retry a failed banner forever. A later screen change can retry.
+        return false;
       }
-      bannerVisible = target;
-      setBannerClass(target);
-      lastStatus = target ? 'Banner requested' : 'Banner hidden';
-      log(lastStatus);
     }
     return bannerVisible;
-  } catch (error) {
-    bannerVisible = false;
-    setBannerClass(false);
-    fail('Banner operation failed', error);
-    return false;
-  } finally {
-    bannerBusy = false;
-    if (initialized && consentAllowsAds && bannerVisible !== bannerWanted) void setBanner(bannerWanted);
-  }
+  };
+
+  const next = bannerQueue.then(operation, operation);
+  bannerQueue = next.then(() => undefined, () => undefined);
+  return next;
 }
 
 async function init() {
@@ -100,6 +129,7 @@ async function init() {
     console.warn('[Gem Rush AdMob]', lastError);
     return false;
   }
+
   if (initialized) {
     void setBanner(isBannerScreen(currentScreen));
     return true;
@@ -110,16 +140,19 @@ async function init() {
     try {
       lastStatus = 'Requesting consent information';
       let consent = await AdMob.requestConsentInfo();
+
       if (consent.isConsentFormAvailable && consent.status === AdmobConsentStatus.REQUIRED) {
         lastStatus = 'Showing consent form';
         consent = await AdMob.showConsentForm();
       }
+
       consentSnapshot = consent;
       consentAllowsAds = !!consent.canRequestAds;
       privacyOptionsRequired = consent.privacyOptionsRequirementStatus === 'REQUIRED';
       log('Consent result:', consent);
+
       if (!consentAllowsAds) {
-        lastError = 'UMP returned canRequestAds=false. No ad request is allowed until consent permits it.';
+        lastError = 'UMP returned canRequestAds=false. No ad request is allowed yet.';
         lastStatus = 'Consent blocks ad requests';
         console.warn('[Gem Rush AdMob]', lastError);
         return false;
@@ -130,42 +163,51 @@ async function init() {
       initialized = true;
       initRetryCount = 0;
       lastError = '';
-      lastStatus = 'SDK initialized; loading test ads';
+      lastStatus = 'SDK initialized';
       log('SDK initialized. Test mode:', TEST_MODE, 'Units:', AD_UNITS);
-      // currentScreen is set by the game before/while initialization may be running.
-      void setBanner(isBannerScreen(currentScreen));
+
+      // Start loading the full-screen format independently of the banner.
       void loadInterstitial();
+      void setBanner(isBannerScreen(currentScreen));
       return true;
     } catch (error) {
       initialized = false;
-      consentAllowsAds = false;
       fail('SDK initialization failed', error);
-      // Android may expose its native content/banner parent a little after the WebView starts.
-      // Retry a few times instead of permanently disabling ads after the first early failure.
+
+      // Android's native content view can become available shortly after WebView startup.
       if (initRetryCount < 3) {
         const delay = 1500 * (initRetryCount + 1);
-        initRetryCount++;
+        initRetryCount += 1;
         log(`Retrying SDK initialization (${initRetryCount}/3) in ${delay} ms`);
-        setTimeout(() => { if (!document.hidden && !initialized) void init(); }, delay);
+        setTimeout(() => {
+          if (!document.hidden && !initialized) void init();
+        }, delay);
       }
       return false;
     }
   })();
-  try { return await initPromise; }
-  finally { initPromise = null; }
+
+  try {
+    return await initPromise;
+  } finally {
+    initPromise = null;
+  }
 }
 
 function setScreen(screen) {
   currentScreen = screen;
-  if (initialized) void setBanner(isBannerScreen(screen));
+  void setBanner(isBannerScreen(screen));
 }
 
 async function showInterstitial() {
   if (!initialized || !consentAllowsAds || interstitialBusy) return false;
   interstitialBusy = true;
+
   try {
+    // Wait for the native banner hide operation to finish before opening full-screen ad.
     await setBanner(false);
     if (!interstitialReady && !(await loadInterstitial())) return false;
+
     await AdMob.showInterstitial({ adId: AD_UNITS.interstitial });
     interstitialReady = false;
     lastStatus = 'Interstitial shown';
@@ -185,9 +227,15 @@ async function showInterstitial() {
 async function showRewarded() {
   if (!initialized || !consentAllowsAds || rewardedBusy) return false;
   rewardedBusy = true;
+
   try {
     await setBanner(false);
-    await AdMob.prepareRewardVideoAd({ adId: AD_UNITS.rewarded, isTesting: TEST_MODE, immersiveMode: true });
+    lastStatus = 'Loading rewarded ad';
+    await AdMob.prepareRewardVideoAd({
+      adId: AD_UNITS.rewarded,
+      isTesting: TEST_MODE,
+      immersiveMode: true,
+    });
     const reward = await AdMob.showRewardVideoAd({ adId: AD_UNITS.rewarded });
     lastStatus = 'Rewarded ad completed';
     return !!reward;
@@ -200,7 +248,6 @@ async function showRewarded() {
   }
 }
 
-// Expose state so a device-side WebView inspection can identify the exact blocker.
 window.GemRushAdMob = {
   init,
   isNative,
@@ -208,16 +255,39 @@ window.GemRushAdMob = {
   setScreen,
   showInterstitial,
   showRewarded,
-  getDebugState: () => ({ native: isNative(), initialized, consentAllowsAds, consent: consentSnapshot, testMode: TEST_MODE, adUnits: AD_UNITS, status: lastStatus, lastError, bannerVisible, bannerWanted, interstitialReady }),
+  getDebugState: () => ({
+    native: isNative(),
+    initialized,
+    consentAllowsAds,
+    consent: consentSnapshot,
+    testMode: TEST_MODE,
+    adUnits: AD_UNITS,
+    status: lastStatus,
+    lastError,
+    bannerVisible,
+    bannerWanted,
+    interstitialReady,
+    interstitialLoading: !!interstitialLoadPromise,
+    currentScreen,
+  }),
   privacyOptionsRequired: () => privacyOptionsRequired,
   showPrivacyOptionsForm: async () => {
-    if (!initialized || !privacyOptionsRequired) return false;
-    try { await AdMob.showPrivacyOptionsForm(); return true; }
-    catch (error) { fail('Privacy options form failed', error); return false; }
+    if (!privacyOptionsRequired) return false;
+    try {
+      await AdMob.showPrivacyOptionsForm();
+      return true;
+    } catch (error) {
+      fail('Privacy options form failed', error);
+      return false;
+    }
   },
 };
 
-// If Android creates its native content view late, retry when the app returns to foreground.
+// Retry initialization when Android returns to the foreground after its native view is ready.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && isNative() && !initialized) setTimeout(() => { void init(); }, 800);
+  if (!document.hidden && isNative() && !initialized && !initPromise) {
+    setTimeout(() => {
+      if (!document.hidden && !initialized) void init();
+    }, 800);
+  }
 });
