@@ -1,5 +1,4 @@
-
-name: Clone Rush Android Build
+name: Gem Rush Android Build
 
 on:
   workflow_dispatch:
@@ -32,23 +31,48 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Prepare web files
-        run: mkdir -p www && cp index.html www/index.html
+      - name: Prepare web files and bundle AdMob bridge
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
+          npx esbuild admob-bridge.js --bundle --format=iife --outfile=www/admob-bridge.js
 
       - name: Add Android platform
-        run: npx cap add android
+        run: npx cap add android --config capacitor.config.json
 
       - name: Generate App Icons and Splash
         run: npx capacitor-assets generate --android
 
+      - name: Configure AdMob App ID
+        run: |
+          mkdir -p android/app/src/main/res/values
+          cat > android/app/src/main/res/values/admob.xml <<'EOF'
+          <resources>
+              <string name="admob_app_id">ca-app-pub-3173758070343843~8176795807</string>
+          </resources>
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          content = path.read_text()
+          marker = '            <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID"'
+          if marker not in content:
+              entry = '''            <meta-data
+                  android:name="com.google.android.gms.ads.APPLICATION_ID"
+                  android:value="@string/admob_app_id" />\n'''
+              content = content.replace("</application>", entry + "    </application>", 1)
+          path.write_text(content)
+          print("AdMob App ID configured.")
+          PY
+
       - name: Sync Android
-        run: npx cap sync android
+        run: npx cap sync android --config capacitor.config.json
 
       - name: Decode signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/clone-rush-upload.jks"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/gem-rush-upload.jks"
 
       - name: Configure Android release signing
         run: |
@@ -74,7 +98,8 @@ jobs:
 
           '''
 
-          content = content.replace(marker, signing + marker, 1)
+          if "signingConfigs {" not in content:
+              content = content.replace(marker, signing + marker, 1)
 
           start = content.index(marker)
           release = content.find("        release {", start)
@@ -83,11 +108,12 @@ jobs:
               raise SystemExit("release build type not found")
 
           insert_at = release + len("        release {")
-          content = (
-              content[:insert_at]
-              + "\n            signingConfig signingConfigs.release"
-              + content[insert_at:]
-          )
+          if "signingConfig signingConfigs.release" not in content[insert_at:insert_at+180]:
+              content = (
+                  content[:insert_at]
+                  + "\n            signingConfig signingConfigs.release"
+                  + content[insert_at:]
+              )
 
           path.write_text(content)
           print("Release signing configured successfully.")
@@ -96,7 +122,7 @@ jobs:
       - name: Build signed APK and AAB
         working-directory: android
         env:
-          KEYSTORE_FILE: ${{ runner.temp }}/clone-rush-upload.jks
+          KEYSTORE_FILE: ${{ runner.temp }}/gem-rush-upload.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
@@ -106,7 +132,7 @@ jobs:
       - name: Upload signed APK and AAB
         uses: actions/upload-artifact@v4
         with:
-          name: Clone-Rush-Signed-Release
+          name: Gem-Rush-Signed-Release
           path: |
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/bundle/release/*.aab
