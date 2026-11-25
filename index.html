@@ -171,7 +171,7 @@ const WH=[{t:'20💎',g:20,w:30},{t:'50💎',g:50,w:25},{t:'100💎',g:100,w:14}
 const Ads={
  ready(){try{return !!(window.GemRushAdMob&&window.GemRushAdMob.isReady())}catch(e){console.warn('[Gem Rush Ads] isReady failed:',e);return false}},
  available(){return !!(window.GemRushAdMob&&typeof window.GemRushAdMob.showRewarded==='function'&&typeof window.GemRushAdMob.showInterstitial==='function')},
- init(){const t0=Date.now();const go=()=>window.GemRushAdMob?window.GemRushAdMob.init():(Date.now()-t0<8000?new Promise(r=>setTimeout(r,250)).then(go):Promise.resolve(false));return go()},
+ init(){return window.GemRushAdMob?window.GemRushAdMob.init():Promise.resolve(false)},
  setScreen(id){try{if(window.GemRushAdMob)window.GemRushAdMob.setScreen(id)}catch(e){console.warn('[Gem Rush Ads] setScreen failed:',e)}},
  withTimeout(promise,ms,label){
    let timer;
@@ -184,7 +184,7 @@ const Ads={
    if(!this.available()){console.warn('[Gem Rush Ads] Rewarded bridge unavailable');return false}
    try{
      console.info('[Gem Rush Ads] Rewarded show requested');
-     const result=await this.withTimeout(window.GemRushAdMob.showRewarded(),200000,'Rewarded show');
+     const result=await this.withTimeout(window.GemRushAdMob.showRewarded(),30000,'Rewarded show');
      console.info('[Gem Rush Ads] Rewarded show result:',result);
      return result===true;
    }catch(e){console.error('[Gem Rush Ads] Rewarded show failed:',e);return false}
@@ -193,7 +193,7 @@ const Ads={
    if(!this.available()){console.warn('[Gem Rush Ads] Interstitial bridge unavailable');return false}
    try{
      console.info('[Gem Rush Ads] Interstitial show requested');
-     const result=await this.withTimeout(window.GemRushAdMob.showInterstitial(),100000,'Interstitial show');
+     const result=await this.withTimeout(window.GemRushAdMob.showInterstitial(),15000,'Interstitial show');
      console.info('[Gem Rush Ads] Interstitial show result:',result);
      return result===true;
    }catch(e){console.error('[Gem Rush Ads] Interstitial show failed:',e);return false}
@@ -249,7 +249,15 @@ _connectMusic(a){
   catch(e){a.volume=this.volume*.25;console.warn('[Gem Rush] Music limiter fallback:',e)}
 }
 tone(f,d,t='sine',v=.1,s=0,w=0){
-  if(!this.on||!this.c)return;
+  if(!this.on)return;
+  if(!this.c)this.init();
+  if(!this.c)return;
+  if(this.c.state==='suspended'){
+    this.c.resume().then(()=>{
+      if(this.on&&this.c&&this.c.state==='running')this.tone(f,d,t,v,s,w);
+    }).catch(e=>console.warn('[Gem Rush] Audio resume failed:',e));
+    return;
+  }
   try{
     const c=this.c,o=c.createOscillator(),gn=c.createGain(),n=c.currentTime+w;
     o.type=t;o.frequency.setValueAtTime(f,n);
