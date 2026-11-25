@@ -26,6 +26,9 @@ let bannerWanted = false;
 let bannerQueue = Promise.resolve();
 let interstitialReady = false;
 let interstitialLoadPromise = null;
+let rewardedReady = false;
+let rewardedLoadPromise = null;
+let rewardEarnedDuringShow = false;
 let interstitialBusy = false;
 let rewardedBusy = false;
 let currentScreen = 'menu';
@@ -47,14 +50,20 @@ async function installAdListeners() {
     [BannerAdPluginEvents.Loaded, () => recordEvent('Banner loaded')],
     [BannerAdPluginEvents.FailedToLoad, e => { lastError = 'Banner failed to load: ' + (e?.message || JSON.stringify(e)); recordEvent('Banner failed to load', e); }],
     [BannerAdPluginEvents.SizeChanged, s => recordEvent('Banner size changed', s)],
-    [InterstitialAdPluginEvents.Loaded, i => recordEvent('Interstitial loaded', i)],
+    [InterstitialAdPluginEvents.Loaded, i => { interstitialReady = true; recordEvent('Interstitial loaded', i); }],
+    [InterstitialAdPluginEvents.Showed, i => recordEvent('Interstitial showed', i)],
+    [InterstitialAdPluginEvents.Dismissed, i => recordEvent('Interstitial dismissed', i)],
     [InterstitialAdPluginEvents.FailedToLoad, e => { lastError = 'Interstitial failed to load: ' + (e?.message || JSON.stringify(e)); recordEvent('Interstitial failed to load', e); }],
     [InterstitialAdPluginEvents.FailedToShow, e => { lastError = 'Interstitial failed to show: ' + (e?.message || JSON.stringify(e)); recordEvent('Interstitial failed to show', e); }],
-    [RewardAdPluginEvents.Loaded, i => recordEvent('Rewarded loaded', i)],
+    [RewardAdPluginEvents.Loaded, i => { rewardedReady = true; recordEvent('Rewarded loaded', i); }],
+    [RewardAdPluginEvents.Showed, i => recordEvent('Rewarded showed', i)],
+    [RewardAdPluginEvents.Dismissed, i => recordEvent('Rewarded dismissed', i)],
+    [RewardAdPluginEvents.Rewarded, i => { rewardEarnedDuringShow = true; recordEvent('Reward earned', i); }],
     [RewardAdPluginEvents.FailedToLoad, e => { lastError = 'Rewarded failed to load: ' + (e?.message || JSON.stringify(e)); recordEvent('Rewarded failed to load', e); }],
     [RewardAdPluginEvents.FailedToShow, e => { lastError = 'Rewarded failed to show: ' + (e?.message || JSON.stringify(e)); recordEvent('Rewarded failed to show', e); }],
   ];
   for (const [eventName, callback] of registrations) {
+    if (!eventName) continue;
     try { await AdMob.addListener(eventName, callback); }
     catch (e) { log('Listener registration failed:', eventName, e); }
   }
@@ -105,6 +114,37 @@ async function loadInterstitial() {
   })();
 
   return interstitialLoadPromise;
+}
+
+async function loadRewarded() {
+  if (!initialized || !consentAllowsAds) return false;
+  if (rewardedReady) return true;
+  if (rewardedLoadPromise) return rewardedLoadPromise;
+
+  rewardedLoadPromise = (async () => {
+    try {
+      lastStatus = 'Loading rewarded ad';
+      recordEvent('Rewarded load requested', { adUnitId: AD_UNITS.rewarded });
+      await AdMob.prepareRewardVideoAd({
+        adId: AD_UNITS.rewarded,
+        isTesting: TEST_MODE,
+        immersiveMode: true,
+      });
+      rewardedReady = true;
+      lastStatus = 'Rewarded loaded';
+      recordEvent('Rewarded prepare completed');
+      return true;
+    } catch (error) {
+      rewardedReady = false;
+      fail('Rewarded load failed', error);
+      recordEvent('Rewarded load error', error?.message || String(error));
+      return false;
+    } finally {
+      rewardedLoadPromise = null;
+    }
+  })();
+
+  return rewardedLoadPromise;
 }
 
 // Serialize native banner operations. This prevents a show request racing a hide request.
@@ -197,6 +237,7 @@ async function init() {
 
       // Start loading the full-screen format independently of the banner.
       void loadInterstitial();
+      void loadRewarded();
       void setBanner(isBannerScreen(currentScreen));
       return true;
     } catch (error) {
@@ -231,24 +272,26 @@ function setScreen(screen) {
 async function showInterstitial() {
   if (!initialized || !consentAllowsAds || interstitialBusy) return false;
   interstitialBusy = true;
+  recordEvent('Interstitial show requested', { ready: interstitialReady, screen: currentScreen });
 
   try {
-    // Wait for the native banner hide operation to finish before opening full-screen ad.
     await setBanner(false);
     if (!interstitialReady && !(await loadInterstitial())) return false;
-
+    lastStatus = 'Showing interstitial';
     await AdMob.showInterstitial({ adId: AD_UNITS.interstitial });
     interstitialReady = false;
-    lastStatus = 'Interstitial shown';
-    void loadInterstitial();
+    lastStatus = 'Interstitial show call completed';
+    recordEvent('Interstitial show call completed');
     return true;
   } catch (error) {
     interstitialReady = false;
     fail('Interstitial show failed', error);
-    void loadInterstitial();
+    recordEvent('Interstitial show error', error?.message || String(error));
     return false;
   } finally {
     interstitialBusy = false;
+    // Reload after the native full-screen presentation has had time to close.
+    setTimeout(() => { if (initialized) void loadInterstitial(); }, 1200);
     if (isBannerScreen(currentScreen)) void setBanner(true);
   }
 }
@@ -256,23 +299,29 @@ async function showInterstitial() {
 async function showRewarded() {
   if (!initialized || !consentAllowsAds || rewardedBusy) return false;
   rewardedBusy = true;
+  rewardEarnedDuringShow = false;
+  recordEvent('Rewarded show requested', { ready: rewardedReady, screen: currentScreen });
 
   try {
     await setBanner(false);
-    lastStatus = 'Loading rewarded ad';
-    await AdMob.prepareRewardVideoAd({
-      adId: AD_UNITS.rewarded,
-      isTesting: TEST_MODE,
-      immersiveMode: true,
-    });
-    const reward = await AdMob.showRewardVideoAd({ adId: AD_UNITS.rewarded });
-    lastStatus = 'Rewarded ad completed';
-    return !!reward;
+    if (!rewardedReady && !(await loadRewarded())) return false;
+    lastStatus = 'Showing rewarded ad';
+    const result = await AdMob.showRewardVideoAd({ adId: AD_UNITS.rewarded });
+    rewardedReady = false;
+    // The plugin's promise result and the Rewarded event are both considered;
+    // a reward is never granted merely because an ad was opened or dismissed.
+    const earned = rewardEarnedDuringShow || !!result;
+    lastStatus = earned ? 'Reward earned' : 'Rewarded ad closed without reward';
+    recordEvent(earned ? 'Reward confirmed' : 'Reward not confirmed', result || 'Reward event not received');
+    return earned;
   } catch (error) {
-    fail('Rewarded ad failed', error);
+    rewardedReady = false;
+    fail('Rewarded show failed', error);
+    recordEvent('Rewarded show error', error?.message || String(error));
     return false;
   } finally {
     rewardedBusy = false;
+    setTimeout(() => { if (initialized) void loadRewarded(); }, 1200);
     if (isBannerScreen(currentScreen)) void setBanner(true);
   }
 }
@@ -297,6 +346,8 @@ window.GemRushAdMob = {
     bannerWanted,
     interstitialReady,
     interstitialLoading: !!interstitialLoadPromise,
+    rewardedReady,
+    rewardedLoading: !!rewardedLoadPromise,
     currentScreen,
     recentEvents: recentEvents.slice(-12),
     listenersInstalled,
