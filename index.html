@@ -169,11 +169,35 @@ const DS=i=>(i-((Date.now()/864e5|0)%4)+4)%4<3;
 const ACH=[{id:'a1',t:'100 elmas topla',k:'coins',n:100,g:50,x:30},{id:'a2',t:'5 bölüm tamamla',k:'levels',n:5,g:60,x:40},{id:'a3',t:'500 askerle kazan',k:'big',n:1,g:150,x:80},{id:'a4',t:'10 pozitif kapıdan geç',k:'gates',n:10,g:50,x:30},{id:'a5',t:'5 düşman ordusunu yen',k:'wins',n:5,g:80,x:50},{id:'a6',t:'1000 elmas topla',k:'coins',n:1000,g:200,x:100},{id:'a7',t:'İlk patronu yen',k:'boss',n:1,g:300,x:150},{id:'a8',t:'25 bölüm tamamla',k:'levels',n:25,g:400,x:200},{id:'a9',t:'100 pozitif kapıdan geç',k:'gates',n:100,g:250,x:120},{id:'a10',t:'50 bölüm tamamla',k:'levels',n:50,g:700,x:350},{id:'a11',t:'1000 düşman askeri yen',k:'enemies',n:1000,g:250,x:120},{id:'a12',t:'10 patron yen',k:'boss',n:10,g:600,x:300},{id:'a13',t:'25 kez yakın sıyırma yap',k:'near',n:25,g:200,x:100},{id:'a14',t:'10000 elmas topla',k:'coins',n:10000,g:900,x:400},{id:'a15',t:'100 bölüm tamamla',k:'levels',n:100,g:1500,x:700},{id:'a16',t:'1000 pozitif kapıdan geç',k:'gates',n:1000,g:1200,x:500},{id:'a17',t:'50 patron yen',k:'boss',n:50,g:2500,x:1000},{id:'a18',t:'10000 düşman askeri yen',k:'enemies',n:10000,g:1800,x:800}];
 const WH=[{t:'20💎',g:20,w:30},{t:'50💎',g:50,w:25},{t:'100💎',g:100,w:14},{t:'🧩1',f:1,w:12},{t:'250💎',g:250,w:5},{t:'🧩3',f:3,w:5},{t:'⭐50',x:50,w:6},{t:'500💎',g:500,w:3}];
 const Ads={
- ready(){return !!(window.GemRushAdMob&&window.GemRushAdMob.isReady())},
- init(){return window.GemRushAdMob?window.GemRushAdMob.init():Promise.resolve(false)},
- setScreen(id){if(window.GemRushAdMob)window.GemRushAdMob.setScreen(id)},
- async showRewarded(){try{return !!(window.GemRushAdMob&&await window.GemRushAdMob.showRewarded())}catch(e){return false}},
- async showInterstitial(){try{return !!(window.GemRushAdMob&&await window.GemRushAdMob.showInterstitial())}catch(e){return false}}
+ ready(){try{return !!(window.GemRushAdMob&&window.GemRushAdMob.isReady())}catch(e){console.warn('[Gem Rush Ads] isReady failed:',e);return false}},
+ available(){return !!(window.GemRushAdMob&&typeof window.GemRushAdMob.showRewarded==='function'&&typeof window.GemRushAdMob.showInterstitial==='function')},
+ init(){const t0=Date.now();const go=()=>window.GemRushAdMob?window.GemRushAdMob.init():(Date.now()-t0<8000?new Promise(r=>setTimeout(r,250)).then(go):Promise.resolve(false));return go()},
+ setScreen(id){try{if(window.GemRushAdMob)window.GemRushAdMob.setScreen(id)}catch(e){console.warn('[Gem Rush Ads] setScreen failed:',e)}},
+ withTimeout(promise,ms,label){
+   let timer;
+   return Promise.race([
+     Promise.resolve(promise),
+     new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label+' timeout after '+ms+'ms')),ms)})
+   ]).finally(()=>clearTimeout(timer));
+ },
+ async showRewarded(){
+   if(!this.available()){console.warn('[Gem Rush Ads] Rewarded bridge unavailable');return false}
+   try{
+     console.info('[Gem Rush Ads] Rewarded show requested');
+     const result=await this.withTimeout(window.GemRushAdMob.showRewarded(),200000,'Rewarded show');
+     console.info('[Gem Rush Ads] Rewarded show result:',result);
+     return result===true;
+   }catch(e){console.error('[Gem Rush Ads] Rewarded show failed:',e);return false}
+ },
+ async showInterstitial(){
+   if(!this.available()){console.warn('[Gem Rush Ads] Interstitial bridge unavailable');return false}
+   try{
+     console.info('[Gem Rush Ads] Interstitial show requested');
+     const result=await this.withTimeout(window.GemRushAdMob.showInterstitial(),100000,'Interstitial show');
+     console.info('[Gem Rush Ads] Interstitial show result:',result);
+     return result===true;
+   }catch(e){console.error('[Gem Rush Ads] Interstitial show failed:',e);return false}
+ }
 };
 /* ===== Save System ===== */
 class SaveSystem{constructor(){this.k='gemrush_v1';this.d=this.def();try{const raw=localStorage.getItem(this.k)||localStorage.getItem('clonerush_v1');if(raw){const r=JSON.parse(raw);if(!r.ver)localStorage.setItem(this.k+'_bak',raw);this.mig(r)}}catch(e){}}
@@ -344,7 +368,10 @@ if(window.GemRushAdMob&&window.GemRushAdMob.privacyOptionsRequired&&window.GemRu
 stats(){this.page(ex('statsTitle'),b=>{const S=this.G.sv.d,s=S.st,p=plv(S.xp),m=Math.floor(s.play/60);[[ex('playerLevel'),p.l+' ('+p.x+'/'+p.need+' XP)'],[ex('highestLevel'),Math.max(0,S.level-1)],[ex('gemsCollected'),s.coins],[ex('enemiesDefeated'),s.enemies],[ex('levelsWon'),s.levels],[ex('positiveGates'),s.gates],[ex('bossesDefeated'),s.boss],[ex('playTime'),Math.floor(m/60)+' '+ex('hours')+' '+m%60+' '+ex('minutes')],[ex('rewardsClaimed'),Object.keys(S.cl).length]].forEach(r=>this.mk(b,'div','pill wide',r[0]+': <b>'+r[1]+'</b>'))})}
 hud(){const G=this.G,v={L:tr('level')+' '+G.lv,N:'👥 '+fmt(Math.round(G.dn)),G:'💎 '+G.sv.d.gold,B:Math.min(100,G.pz/G.m.L*100)+'%'};
 if(this.c.L!=v.L)$('hL').textContent=this.c.L=v.L;if(this.c.N!=v.N)$('hN').textContent=this.c.N=v.N;if(this.c.G!=v.G)$('hG').textContent=this.c.G=v.G;$('hB').style.width=v.B}
-end(win,gold,txt){$('eT').textContent=win?(this.G.sv.d.lang==='tr'?'ZAFER':ex('won').toUpperCase()):(this.G.sv.d.lang==='tr'?'YENİLGİ':ex('defeat').toUpperCase());$('eT').className='big '+(win?'w':'l');$('eG').textContent='+'+gold+' 💎';$('eS').textContent=txt+(this.G.up?'  ⭐ '+ex('levelUp'):'');$('bNext').textContent=ex('nextLevel')+' ▶';$('bCont').textContent=ex('continueAd');$('bX2').textContent='💎 +200';$('bRetry').textContent='↻ '+ex('retry');$('bMenu').textContent=ex('menu');$('bNext').style.display=win?'':'none';$('bCont').style.display=!win&&!this.G.rc&&Ads.ready()?'':'none';$('bX2').style.display=win&&Ads.ready()?'':'none';this.show('end')}}
+end(win,gold,txt){$('eT').textContent=win?(this.G.sv.d.lang==='tr'?'ZAFER':ex('won').toUpperCase()):(this.G.sv.d.lang==='tr'?'YENİLGİ':ex('defeat').toUpperCase());$('eT').className='big '+(win?'w':'l');$('eG').textContent='+'+gold+' 💎';$('eS').textContent=txt+(this.G.up?'  ⭐ '+ex('levelUp'):'');$('bNext').textContent=ex('nextLevel')+' ▶';$('bCont').textContent=ex('continueAd');$('bX2').textContent='💎 +200';$('bRetry').textContent='↻ '+ex('retry');$('bMenu').textContent=ex('menu');$('bNext').style.display=win?'':'none';
+$('bCont').style.display=!win&&!this.G.rc&&Ads.available()?'':'none';
+$('bX2').style.display=win&&Ads.available()?'':'none';
+this.show('end')}}
 /* ===== Game Engine (+ Character Formation rendering) ===== */
 class Game{
 constructor(){this.sv=new SaveSystem();this.au=new AudioManager(this.sv.d.sound,this.sv.d.vib);this.au.setVolume(this.sv.d.volume);this.au.musicOn=this.sv.d.music;this.eco=new Economy(this.sv);this.t=0;this.parts=[];this.fl=[];this.shake=0;this.tx=0;this.cam=0;this.pc=new PlayerController(cv,this);this.ui=new UIManager(this);
@@ -387,9 +414,43 @@ spin(){if(!this.wcan())return -1;const S=this.sv.d;let r=Math.random()*100,i=0;f
 mclaim(t,id){const S=this.sv.d,dm=this.dmis(),m=t=='d'?DAILY.find(a=>a.k==id):ACH.find(a=>a.id==id);if(!m)return;const v=t=='d'?dm.p[id]:S.st[m.k]||0,c=t=='d'?dm.c:S.cl;if(v<m.n||c[id])return;c[id]=1;S.gold+=m.g;this.xp(m.x||20);this.au.unlock();this.sv.save()}
 fragUnlock(){const S=this.sv.d,c=SKINS.map((k,i)=>i).filter(i=>!SKINS[i].u&&!S.owned.includes(i));if(S.frag<10||!c.length)return;const i=c[Math.random()*c.length|0];S.frag-=10;S.owned.push(i);S.skin=i;this.ui.pv=i;this.au.unlock();this.sv.save()}
 resume(){if(this.st!='end'||this.win||this.rc)return;this.rc=1;if(this.bp>=1){this.n=Math.max(10,Math.ceil(this.en*1.1)+1);this.st='battle'}else{this.n=Math.max(10,this.prev);this.st='play';for(const o of this.m.obs)if(Math.abs(this.pz-o.z)<.6)o.hit=1}this.dn=this.n;this.endT=0;this.shake=0;this.ui.show('hud')}
-bonus(){if(this.rewardBusy)return;this.rewardBusy=true;Ads.showRewarded().then(ok=>{if(ok){this.eco.add(200);$('bX2').style.display='none';$('eG').textContent='+'+this.lastGold+' + 200 💎'} }).finally(()=>{this.rewardBusy=false})}
-continueWithAd(){if(this.rewardBusy||this.win||this.rc)return;this.rewardBusy=true;Ads.showRewarded().then(ok=>{if(ok)this.resume()}).finally(()=>{this.rewardBusy=false})}
-exitEnd(action){if(this.st!=='end'){action();return}if(this.endLeaving)return;this.endLeaving=true;const d=this.sv.d;d.adMatches=(d.adMatches||0)+1;this.sv.save();const go=()=>{this.endLeaving=false;action()};if(d.adMatches%3===0)Ads.showInterstitial().finally(go);else go()}
+bonus(){
+ if(this.rewardBusy)return;
+ this.rewardBusy=true;
+ $('bX2').disabled=true;
+ Ads.showRewarded().then(ok=>{
+   if(ok){
+     this.eco.add(200);
+     $('bX2').style.display='none';
+     $('eG').textContent='+'+this.lastGold+' + 200 💎';
+   }else{
+     console.warn('[Gem Rush] Rewarded ad was not completed; no gems granted.');
+   }
+ }).catch(e=>console.error('[Gem Rush] Bonus ad error:',e))
+ .finally(()=>{this.rewardBusy=false;$('bX2').disabled=false});
+}
+continueWithAd(){
+ if(this.rewardBusy||this.win||this.rc)return;
+ this.rewardBusy=true;
+ $('bCont').disabled=true;
+ Ads.showRewarded().then(ok=>{
+   if(ok)this.resume();
+   else console.warn('[Gem Rush] Continue ad was not completed; game remains at end screen.');
+ }).catch(e=>console.error('[Gem Rush] Continue ad error:',e))
+ .finally(()=>{this.rewardBusy=false;$('bCont').disabled=false});
+}
+exitEnd(action){
+ if(this.st!=='end'){action();return}
+ if(this.endLeaving)return;
+ this.endLeaving=true;
+ const d=this.sv.d;
+ d.adMatches=(d.adMatches||0)+1;
+ this.sv.save();
+ const go=()=>{this.endLeaving=false;action()};
+ if(d.adMatches%3===0){
+   Ads.showInterstitial().catch(e=>console.error('[Gem Rush] Interstitial error:',e)).finally(go);
+ }else go();
+}
 slide(x,b,w){const k=THEMES[this.m.th].k,h=w*.9;g.save();g.translate(x,b);
 if(k=='d'){g.fillStyle='#3f9f3f';g.fillRect(-w*.12,-h,w*.24,h);g.fillRect(-w*.4,-h*.65,w*.28,w*.14);g.fillRect(w*.12,-h*.5,w*.28,w*.14)}
 else if(k=='i'){g.fillStyle='#bff4ff';g.beginPath();g.moveTo(0,-h*1.1);g.lineTo(w*.4,-h*.4);g.lineTo(0,0);g.lineTo(-w*.4,-h*.4);g.fill()}
