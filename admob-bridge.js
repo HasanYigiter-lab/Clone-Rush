@@ -1,9 +1,16 @@
 import { Capacitor } from '@capacitor/core';
-import { AdMob, AdmobConsentStatus, BannerAdPosition, BannerAdSize, BannerAdPluginEvents, InterstitialAdPluginEvents, RewardAdPluginEvents } from '@capacitor-community/admob';
+import {
+  AdMob,
+  AdmobConsentStatus,
+  BannerAdPosition,
+  BannerAdSize,
+  BannerAdPluginEvents,
+  InterstitialAdPluginEvents,
+  RewardAdPluginEvents,
+} from '@capacitor-community/admob';
 
-// Gerçek cihazda tüm formatlar test reklamıyla doğrulanana kadar TEST_MODE = true kalsın.
-// Google Play'e yüklemeden önce false yap.
-const TEST_MODE = true;
+// Gem Rush RELEASE configuration: real AdMob ad units are active.
+const TEST_MODE = false;
 const TEST_AD_UNITS = {
   banner: 'ca-app-pub-3940256099942544/9214589741',
   interstitial: 'ca-app-pub-3940256099942544/1033173712',
@@ -50,7 +57,9 @@ function withTimeout(promise, ms, label) {
   let timer;
   return Promise.race([
     Promise.resolve(promise),
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + ' timeout (' + ms + ' ms)')), ms); }),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timeout (${ms} ms)`)), ms);
+    }),
   ]).finally(() => clearTimeout(timer));
 }
 
@@ -59,7 +68,11 @@ function log(...args) {
 }
 
 function recordEvent(name, detail = '') {
-  const item = { time: new Date().toLocaleTimeString(), name, detail: detail ? (typeof detail === 'string' ? detail : JSON.stringify(detail)) : '' };
+  const item = {
+    time: new Date().toLocaleTimeString(),
+    name,
+    detail: detail ? (typeof detail === 'string' ? detail : JSON.stringify(detail)) : '',
+  };
   recentEvents.push(item);
   if (recentEvents.length > 20) recentEvents.shift();
   lastStatus = name;
@@ -77,7 +90,7 @@ function setBannerClass(visible) {
   if (app) app.classList.toggle('ad-banner-visible', !!visible);
 }
 
-// Eski eklenti sürümleri canRequestAds alanını döndürmez; bu durumda status'a bakılır.
+// Older plugin versions may omit canRequestAds. Only explicit allowed statuses pass.
 function consentCanRequestAds(consent) {
   if (!consent) return false;
   if (typeof consent.canRequestAds === 'boolean') return consent.canRequestAds;
@@ -85,20 +98,31 @@ function consentCanRequestAds(consent) {
   return status === 'OBTAINED' || status === 'NOT_REQUIRED';
 }
 
-// Başarısız yüklemeden sonra kademeli (5s, 10s, 20s, 40s, en fazla 60s) yeniden dene.
 function retryDelay(failCount) {
   return Math.min(60000, 5000 * Math.pow(2, Math.max(0, failCount - 1)));
 }
 
+function scheduleConsentRetry() {
+  setTimeout(() => {
+    if (!initialized && !initPromise && isNative()) void init();
+  }, 15000);
+}
+
 async function installAdListeners() {
   if (listenersInstalled) return;
-  listenersInstalled = true;
   const registrations = [
     [BannerAdPluginEvents.Loaded, () => recordEvent('Banner loaded')],
-    [BannerAdPluginEvents.FailedToLoad, e => { lastError = 'Banner failed to load: ' + (e?.message || JSON.stringify(e)); recordEvent('Banner failed to load', e); }],
+    [BannerAdPluginEvents.FailedToLoad, e => {
+      lastError = 'Banner failed to load: ' + (e?.message || JSON.stringify(e));
+      recordEvent('Banner failed to load', e);
+    }],
     [BannerAdPluginEvents.SizeChanged, s => recordEvent('Banner size changed', s)],
 
-    [InterstitialAdPluginEvents.Loaded, i => { interstitialReady = true; interstitialFailCount = 0; recordEvent('Interstitial loaded', i); }],
+    [InterstitialAdPluginEvents.Loaded, i => {
+      interstitialReady = true;
+      interstitialFailCount = 0;
+      recordEvent('Interstitial loaded', i);
+    }],
     [InterstitialAdPluginEvents.Showed, i => recordEvent('Interstitial showed', i)],
     [InterstitialAdPluginEvents.Dismissed, i => {
       interstitialReady = false;
@@ -108,7 +132,7 @@ async function installAdListeners() {
     }],
     [InterstitialAdPluginEvents.FailedToLoad, e => {
       interstitialReady = false;
-      interstitialFailCount += 1;
+      interstitialFailCount++;
       lastError = 'Interstitial failed to load: ' + (e?.message || JSON.stringify(e));
       recordEvent('Interstitial failed to load', e);
       setTimeout(() => { if (initialized) void loadInterstitial(); }, retryDelay(interstitialFailCount));
@@ -120,7 +144,11 @@ async function installAdListeners() {
       if (interstitialDismissResolve) interstitialDismissResolve('failed');
     }],
 
-    [RewardAdPluginEvents.Loaded, i => { rewardedReady = true; rewardedFailCount = 0; recordEvent('Rewarded loaded', i); }],
+    [RewardAdPluginEvents.Loaded, i => {
+      rewardedReady = true;
+      rewardedFailCount = 0;
+      recordEvent('Rewarded loaded', i);
+    }],
     [RewardAdPluginEvents.Showed, i => recordEvent('Rewarded showed', i)],
     [RewardAdPluginEvents.Dismissed, i => {
       rewardedReady = false;
@@ -128,10 +156,13 @@ async function installAdListeners() {
       if (rewardedDismissResolve) rewardedDismissResolve('dismissed');
       setTimeout(() => { if (initialized) void loadRewarded(); }, 500);
     }],
-    [RewardAdPluginEvents.Rewarded, i => { rewardEarnedDuringShow = true; recordEvent('Reward earned', i); }],
+    [RewardAdPluginEvents.Rewarded, i => {
+      rewardEarnedDuringShow = true;
+      recordEvent('Reward earned', i);
+    }],
     [RewardAdPluginEvents.FailedToLoad, e => {
       rewardedReady = false;
-      rewardedFailCount += 1;
+      rewardedFailCount++;
       lastError = 'Rewarded failed to load: ' + (e?.message || JSON.stringify(e));
       recordEvent('Rewarded failed to load', e);
       setTimeout(() => { if (initialized) void loadRewarded(); }, retryDelay(rewardedFailCount));
@@ -143,11 +174,16 @@ async function installAdListeners() {
       if (rewardedDismissResolve) rewardedDismissResolve('failed');
     }],
   ];
+
   for (const [eventName, callback] of registrations) {
     if (!eventName) continue;
-    try { await AdMob.addListener(eventName, callback); }
-    catch (e) { log('Listener registration failed:', eventName, e); }
+    try {
+      await AdMob.addListener(eventName, callback);
+    } catch (e) {
+      log('Listener registration failed:', eventName, e);
+    }
   }
+  listenersInstalled = true;
 }
 
 async function loadInterstitial() {
@@ -175,7 +211,6 @@ async function loadInterstitial() {
       interstitialLoadPromise = null;
     }
   })();
-
   return interstitialLoadPromise;
 }
 
@@ -206,19 +241,15 @@ async function loadRewarded() {
       rewardedLoadPromise = null;
     }
   })();
-
   return rewardedLoadPromise;
 }
 
-// Banner işlemleri sırayla çalışır. Her native çağrının zaman aşımı vardır,
-// böylece takılan bir banner çağrısı kuyruğu (ve tam ekran reklamları) kilitleyemez.
 function setBanner(visible) {
   bannerWanted = !!visible;
   if (!initialized || !consentAllowsAds) return Promise.resolve(false);
 
   const operation = async () => {
     if (!initialized || !consentAllowsAds) return false;
-
     while (bannerVisible !== bannerWanted) {
       const target = bannerWanted;
       try {
@@ -233,7 +264,6 @@ function setBanner(visible) {
         } else {
           await withTimeout(AdMob.hideBanner(), 5000, 'Banner hide');
         }
-
         bannerVisible = target;
         setBannerClass(target);
         lastStatus = target ? 'Banner show requested' : 'Banner hidden';
@@ -253,9 +283,8 @@ function setBanner(visible) {
   return next;
 }
 
-// Tam ekran reklamdan önce banner'ı gizle, ama en fazla 1,2 sn bekle.
 async function hideBannerBeforeFullscreen() {
-  try { await Promise.race([setBanner(false), sleep(1200)]); } catch (e) { /* yoksay */ }
+  try { await Promise.race([setBanner(false), sleep(1200)]); } catch (_) {}
 }
 
 async function init() {
@@ -265,7 +294,6 @@ async function init() {
     console.warn('[Gem Rush AdMob]', lastError);
     return false;
   }
-
   if (initialized) {
     void setBanner(isBannerScreen(currentScreen));
     return true;
@@ -275,29 +303,33 @@ async function init() {
   initPromise = (async () => {
     try {
       lastStatus = 'Requesting consent information';
-      let consent = null;
+      let consent;
       try {
         consent = await withTimeout(AdMob.requestConsentInfo(), 20000, 'Consent info');
-        if (consent.isConsentFormAvailable && consent.status === AdmobConsentStatus.REQUIRED) {
+        if (consent?.isConsentFormAvailable && consent.status === AdmobConsentStatus.REQUIRED) {
           lastStatus = 'Showing consent form';
-          consent = await AdMob.showConsentForm();
+          consent = await withTimeout(AdMob.showConsentForm(), 30000, 'Consent form');
         }
       } catch (consentError) {
-        // Onay bilgisi alınamazsa (ör. ağ gecikmesi) SDK'yı yine de başlat;
-        // SDK, onay gerektiren bölgelerde kişiselleştirilmiş reklamı kendisi kısıtlar.
-        fail('Consent step failed (continuing)', consentError);
-        consent = null;
+        // UMP status is unknown. Block all ad requests until consent can be checked.
+        consentSnapshot = null;
+        consentAllowsAds = false;
+        privacyOptionsRequired = false;
+        fail('Consent step failed - ad requests blocked', consentError);
+        recordEvent('Consent unavailable - ads blocked');
+        scheduleConsentRetry();
+        return false;
       }
 
-      consentSnapshot = consent;
-      consentAllowsAds = consent ? consentCanRequestAds(consent) : true;
+      consentSnapshot = consent || null;
+      consentAllowsAds = consentCanRequestAds(consent);
       privacyOptionsRequired = consent?.privacyOptionsRequirementStatus === 'REQUIRED';
       log('Consent result:', consent, 'allowsAds:', consentAllowsAds);
 
       if (!consentAllowsAds) {
-        lastError = 'UMP returned canRequestAds=false. No ad request is allowed yet.';
+        lastError = 'UMP returned canRequestAds=false. No ad request is allowed.';
         lastStatus = 'Consent blocks ad requests';
-        console.warn('[Gem Rush AdMob]', lastError);
+        recordEvent('Consent blocks ad requests');
         return false;
       }
 
@@ -317,10 +349,9 @@ async function init() {
     } catch (error) {
       initialized = false;
       fail('SDK initialization failed', error);
-
       if (initRetryCount < 5) {
         const delay = 1500 * (initRetryCount + 1);
-        initRetryCount += 1;
+        initRetryCount++;
         log(`Retrying SDK initialization (${initRetryCount}/5) in ${delay} ms`);
         setTimeout(() => {
           if (!initialized && !initPromise) void init();
@@ -355,6 +386,7 @@ async function showInterstitial() {
     lastStatus = 'Showing interstitial';
     const outcome = await new Promise(resolve => {
       let done = false;
+      let safety;
       const finish = value => {
         if (done) return;
         done = true;
@@ -362,15 +394,19 @@ async function showInterstitial() {
         interstitialDismissResolve = null;
         resolve(value);
       };
-      // Reklam kapanınca (Dismissed olayı) veya gösterilemezse biter.
       interstitialDismissResolve = finish;
-      const safety = setTimeout(() => finish('timeout'), 90000);
+      safety = setTimeout(() => finish('timeout'), 90000);
       AdMob.showInterstitial().then(
-        () => { interstitialReady = false; recordEvent('Interstitial show call completed'); },
-        error => { fail('Interstitial show failed', error); finish('error'); }
+        () => {
+          interstitialReady = false;
+          recordEvent('Interstitial show call completed');
+        },
+        error => {
+          fail('Interstitial show failed', error);
+          finish('error');
+        },
       );
     });
-
     interstitialReady = false;
     recordEvent('Interstitial finished', outcome);
     return outcome === 'dismissed';
@@ -401,6 +437,7 @@ async function showRewarded() {
     const outcome = await new Promise(resolve => {
       let done = false;
       let graceTimer = null;
+      let safety;
       const finish = value => {
         if (done) return;
         done = true;
@@ -409,23 +446,23 @@ async function showRewarded() {
         rewardedDismissResolve = null;
         resolve(value);
       };
-      // Reklam kapanınca (Dismissed olayı) veya gösterilemezse biter.
       rewardedDismissResolve = finish;
-      const safety = setTimeout(() => finish('timeout'), 180000);
+      safety = setTimeout(() => finish('timeout'), 180000);
       AdMob.showRewardVideoAd().then(
         result => {
-          // Eklenti ödül kazanılınca sonuç döndürür; ödül nesnesi varsa ödül say.
-          if (result && (result.amount !== undefined || result.type !== undefined)) rewardEarnedDuringShow = true;
-          // Dismissed olayı gelmezse reklam ekranını sonsuza dek bekleme.
+          if (result && (result.amount !== undefined || result.type !== undefined)) {
+            rewardEarnedDuringShow = true;
+          }
           graceTimer = setTimeout(() => finish('grace'), 20000);
         },
-        error => { fail('Rewarded show failed', error); finish('error'); }
+        error => {
+          fail('Rewarded show failed', error);
+          finish('error');
+        },
       );
     });
 
     rewardedReady = false;
-    // Ödül yalnızca Rewarded olayı veya ödül nesnesi geldiyse verilir;
-    // reklam sadece açıldı ya da kapatıldı diye ödül verilmez.
     const earned = rewardEarnedDuringShow;
     lastStatus = earned ? 'Reward earned' : 'Rewarded ad closed without reward';
     recordEvent(earned ? 'Reward confirmed' : 'Reward not confirmed', outcome);
@@ -483,10 +520,9 @@ window.GemRushAdMob = {
   },
 };
 
-// Köprü yüklenir yüklenmez başlat; HTML'deki Ads.init() aynı işlemi paylaşır.
+// Initialize at startup; the HTML Ads.init() call safely shares the same promise.
 if (isNative()) setTimeout(() => { void init(); }, 0);
 
-// Android ön plana dönünce native görünüm hazırsa yeniden dene.
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && isNative() && !initialized && !initPromise) {
     setTimeout(() => {
