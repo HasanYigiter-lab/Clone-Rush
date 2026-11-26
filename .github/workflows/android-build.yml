@@ -44,9 +44,7 @@ jobs:
           find www -maxdepth 4 -type f
           test -s www/index.html
           test -s www/admob-bridge.js
-          # Check release mode in the original source. esbuild may inline/remove the constant.
           grep -Fq "const TEST_MODE = false" admob-bridge.js
-          # Confirm all production ad unit IDs are present in source and bundled output.
           grep -Fq "ca-app-pub-3173758070343843/8727460148" admob-bridge.js
           grep -Fq "ca-app-pub-3173758070343843/6264627536" admob-bridge.js
           grep -Fq "ca-app-pub-3173758070343843/7985224111" admob-bridge.js
@@ -58,7 +56,8 @@ jobs:
 
       - name: Add Android platform
         run: npx cap add android
-              - name: Set Minimum Android SDK to 24
+
+      - name: Set Minimum Android SDK to 24
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -226,3 +225,4 @@ jobs:
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/bundle/release/*.aab
           retention-days: 7
+
