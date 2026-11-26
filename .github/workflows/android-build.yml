@@ -58,6 +58,35 @@ jobs:
 
       - name: Add Android platform
         run: npx cap add android
+              - name: Set Minimum Android SDK to 24
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/variables.gradle")
+
+          if not path.exists():
+              raise SystemExit("variables.gradle not found!")
+
+          content = path.read_text()
+
+          updated, count = re.subn(
+              r'(?m)^(\s*minSdkVersion\s*=\s*)\d+',
+              r'\g<1>24',
+              content
+          )
+
+          if count == 0:
+              raise SystemExit("minSdkVersion setting not found!")
+
+          path.write_text(updated)
+
+          if not re.search(r'(?m)^\s*minSdkVersion\s*=\s*24\s*$', updated):
+              raise SystemExit("Minimum SDK verification failed!")
+
+          print("Minimum Android SDK successfully set to 24.")
+          PY
 
       - name: Generate App Icons and Splash
         run: npx capacitor-assets generate --android
