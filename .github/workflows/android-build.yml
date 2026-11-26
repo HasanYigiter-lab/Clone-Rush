@@ -45,12 +45,34 @@ jobs:
           mkdir -p www
           cp index.html www/index.html
           npx esbuild admob-bridge.js --bundle --format=iife --outfile=www/admob-bridge.js
-
           test -s www/index.html
           test -s www/admob-bridge.js
 
       - name: Add Android platform
         run: npx cap add android
+
+      - name: Set Play Store Version Code
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/app/build.gradle")
+          content = path.read_text()
+
+          content, count = re.subn(
+              r'(?m)^(\s*versionCode\s+)\d+',
+              r'\g<1>2',
+              content,
+              count=1
+          )
+
+          if count == 0:
+              raise SystemExit("versionCode bulunamadı.")
+
+          path.write_text(content)
+          print("Google Play versionCode = 2")
+          PY
 
       - name: Configure Android SDK Versions
         run: |
