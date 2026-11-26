@@ -1,3 +1,4 @@
+
 name: Gem Rush Android Build
 
 on:
@@ -57,7 +58,12 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Set Minimum Android SDK to 24
+      - name: Install Android SDK 36
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Configure Android SDK Versions
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -70,21 +76,35 @@ jobs:
 
           content = path.read_text()
 
-          updated, count = re.subn(
-              r'(?m)^(\s*minSdkVersion\s*=\s*)\d+',
-              r'\g<1>24',
-              content
-          )
+          versions = {
+              "minSdkVersion": 24,
+              "compileSdkVersion": 36,
+              "targetSdkVersion": 36,
+          }
 
-          if count == 0:
-              raise SystemExit("minSdkVersion setting not found!")
+          for key, value in versions.items():
+              pattern = rf'(?m)^(\s*{key}\s*=\s*)\d+'
+              content, count = re.subn(
+                  pattern,
+                  lambda m: m.group(1) + str(value),
+                  content
+              )
 
-          path.write_text(updated)
+              if count == 0:
+                  raise SystemExit(f"{key} not found in variables.gradle")
 
-          if not re.search(r'(?m)^\s*minSdkVersion\s*=\s*24\s*$', updated):
-              raise SystemExit("Minimum SDK verification failed!")
+          path.write_text(content)
 
-          print("Minimum Android SDK successfully set to 24.")
+          for key, value in versions.items():
+              if not re.search(
+                  rf'(?m)^\s*{key}\s*=\s*{value}\s*$',
+                  content
+              ):
+                  raise SystemExit(f"{key} verification failed")
+
+          print("Minimum SDK: 24")
+          print("Compile SDK: 36")
+          print("Target SDK: 36")
           PY
 
       - name: Generate App Icons and Splash
@@ -172,6 +192,7 @@ jobs:
 
           content = path.read_text()
           marker = "    buildTypes {"
+
           if marker not in content:
               raise SystemExit("buildTypes block not found")
 
@@ -191,10 +212,12 @@ jobs:
 
           start = content.index(marker)
           release = content.find("        release {", start)
+
           if release == -1:
               raise SystemExit("release build type not found")
 
           insert_at = release + len("        release {")
+
           if "signingConfig signingConfigs.release" not in content[insert_at:insert_at + 250]:
               content = content[:insert_at] + "\n            signingConfig signingConfigs.release" + content[insert_at:]
 
@@ -225,4 +248,3 @@ jobs:
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/bundle/release/*.aab
           retention-days: 7
-
