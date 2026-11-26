@@ -29,6 +29,14 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
@@ -58,11 +66,6 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      - name: Install Android SDK 36
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
-
       - name: Configure Android SDK Versions
         run: |
           python3 - <<'PY'
@@ -89,7 +92,6 @@ jobs:
                   lambda m: m.group(1) + str(value),
                   content
               )
-
               if count == 0:
                   raise SystemExit(f"{key} not found in variables.gradle")
 
@@ -187,6 +189,7 @@ jobs:
           from pathlib import Path
 
           path = Path("android/app/build.gradle")
+
           if not path.exists():
               raise SystemExit("android/app/build.gradle not found")
 
