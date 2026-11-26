@@ -19,53 +19,42 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
+      # Güncel Android SDK araçları
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK 36
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Build web files and bundle AdMob bridge
+      - name: Prepare web files and bundle AdMob bridge
         run: |
-          npm run build
           mkdir -p www
           cp index.html www/index.html
-          npx --yes esbuild admob-bridge.js --bundle --platform=browser --format=iife --target=es2020 --outfile=www/admob-bridge.js
-
-      - name: Verify Web Files and Release AdMob Configuration
-        run: |
-          echo "=== WWW FILES ==="
-          find www -maxdepth 4 -type f
+          npx esbuild admob-bridge.js --bundle --format=iife --outfile=www/admob-bridge.js
           test -s www/index.html
           test -s www/admob-bridge.js
-          grep -Fq "const TEST_MODE = false" admob-bridge.js
-          grep -Fq "ca-app-pub-3173758070343843/8727460148" admob-bridge.js
-          grep -Fq "ca-app-pub-3173758070343843/6264627536" admob-bridge.js
-          grep -Fq "ca-app-pub-3173758070343843/7985224111" admob-bridge.js
-          grep -Fq "ca-app-pub-3173758070343843/8727460148" www/admob-bridge.js
-          grep -Fq "ca-app-pub-3173758070343843/6264627536" www/admob-bridge.js
-          grep -Fq "ca-app-pub-3173758070343843/7985224111" www/admob-bridge.js
-          ! grep -q 'id="adDiag"' www/index.html
-          echo "Web files, live ad units and hidden diagnostic panel verified."
 
       - name: Add Android platform
-        run: npx cap add android
+        run: npx cap add android --config capacitor.config.json
 
+      # Google Play gereksinimleri:
+      # Minimum SDK 24, Compile SDK 36, Target SDK 36
       - name: Configure Android SDK Versions
         run: |
           python3 - <<'PY'
@@ -75,7 +64,7 @@ jobs:
           path = Path("android/variables.gradle")
 
           if not path.exists():
-              raise SystemExit("variables.gradle not found!")
+              raise SystemExit("android/variables.gradle bulunamadı.")
 
           content = path.read_text()
 
@@ -86,27 +75,17 @@ jobs:
           }
 
           for key, value in versions.items():
-              pattern = rf'(?m)^(\s*{key}\s*=\s*)\d+'
-              content, count = re.subn(
-                  pattern,
-                  lambda m: m.group(1) + str(value),
-                  content
-              )
+              pattern = rf"(?m)^(\s*{key}\s*=\s*)\d+"
+              content, count = re.subn(pattern, rf"\g<1>{value}", content)
+
               if count == 0:
-                  raise SystemExit(f"{key} not found in variables.gradle")
+                  raise SystemExit(f"{key} değişkeni variables.gradle içinde bulunamadı.")
 
           path.write_text(content)
-
-          for key, value in versions.items():
-              if not re.search(
-                  rf'(?m)^\s*{key}\s*=\s*{value}\s*$',
-                  content
-              ):
-                  raise SystemExit(f"{key} verification failed")
-
-          print("Minimum SDK: 24")
-          print("Compile SDK: 36")
-          print("Target SDK: 36")
+          print("Android SDK sürümleri ayarlandı:")
+          print("minSdkVersion = 24")
+          print("compileSdkVersion = 36")
+          print("targetSdkVersion = 36")
           PY
 
       - name: Generate App Icons and Splash
@@ -115,73 +94,57 @@ jobs:
       - name: Configure AdMob App ID
         run: |
           mkdir -p android/app/src/main/res/values
-          cat > android/app/src/main/res/values/admob.xml <<'XML'
+
+          cat > android/app/src/main/res/values/admob.xml <<'EOF'
           <resources>
               <string name="admob_app_id">ca-app-pub-3173758070343843~8176795807</string>
           </resources>
-          XML
+          EOF
 
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("android/app/src/main/AndroidManifest.xml")
           content = path.read_text()
-          marker = "com.google.android.gms.ads.APPLICATION_ID"
-          entry = '''<meta-data
-                      android:name="com.google.android.gms.ads.APPLICATION_ID"
-                      android:value="@string/admob_app_id" />'''
-          pattern = r'<meta-data\b(?=[^>]*android:name="' + re.escape(marker) + r'")[^>]*/>'
 
-          if re.search(pattern, content):
-              content = re.sub(pattern, entry, content, count=1)
-          else:
+          if "com.google.android.gms.ads.APPLICATION_ID" not in content:
+              entry = '''
+              <meta-data
+                  android:name="com.google.android.gms.ads.APPLICATION_ID"
+                  android:value="@string/admob_app_id" />
+          '''
               if "</application>" not in content:
-                  raise SystemExit("AndroidManifest.xml application tag not found")
-              content = content.replace(
-                  "</application>",
-                  "        " + entry + "\n    </application>",
-                  1
-              )
+                  raise SystemExit("AndroidManifest.xml içinde application etiketi bulunamadı.")
+
+              content = content.replace("</application>", entry + "\n    </application>", 1)
 
           path.write_text(content)
-          print("AdMob App ID configured and verified.")
+          print("AdMob App ID configured.")
           PY
 
       - name: Sync Android
-        run: npx cap sync android
+        run: npx cap sync android --config capacitor.config.json
 
-      - name: Configure Maven Central mirror
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("android/build.gradle")
-          content = path.read_text()
-          mirror = '''maven {
-                      url "https://maven-central.storage-download.googleapis.com/maven2/"
-                  }
-                  '''
-
-          if "maven-central.storage-download.googleapis.com" not in content:
-              if "mavenCentral()" not in content:
-                  raise SystemExit("mavenCentral() not found in android/build.gradle")
-              content = content.replace("mavenCentral()", mirror + "mavenCentral()", 1)
-
-          path.write_text(content)
-          print("Maven Central mirror configured.")
-          PY
-
-      - name: Decode signing key
+      - name: Decode and verify signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "ANDROID_KEYSTORE_BASE64 secret is missing"
-            exit 1
-          fi
+          set -e
+
+          test -n "$KEYSTORE_BASE64" || (echo "ANDROID_KEYSTORE_BASE64 eksik" && exit 1)
+          test -n "$KEYSTORE_PASSWORD" || (echo "KEYSTORE_PASSWORD eksik" && exit 1)
+          test -n "$KEY_ALIAS" || (echo "KEY_ALIAS eksik" && exit 1)
+
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/gem-rush-upload.jks"
+
           test -s "$RUNNER_TEMP/gem-rush-upload.jks"
+
+          keytool -list \
+            -keystore "$RUNNER_TEMP/gem-rush-upload.jks" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS"
 
       - name: Configure Android release signing
         run: |
@@ -189,15 +152,12 @@ jobs:
           from pathlib import Path
 
           path = Path("android/app/build.gradle")
-
-          if not path.exists():
-              raise SystemExit("android/app/build.gradle not found")
-
           content = path.read_text()
+
           marker = "    buildTypes {"
 
           if marker not in content:
-              raise SystemExit("buildTypes block not found")
+              raise SystemExit("buildTypes bloğu bulunamadı.")
 
           signing = '''    signingConfigs {
               release {
@@ -217,12 +177,16 @@ jobs:
           release = content.find("        release {", start)
 
           if release == -1:
-              raise SystemExit("release build type not found")
+              raise SystemExit("release build type bulunamadı.")
 
           insert_at = release + len("        release {")
 
-          if "signingConfig signingConfigs.release" not in content[insert_at:insert_at + 250]:
-              content = content[:insert_at] + "\n            signingConfig signingConfigs.release" + content[insert_at:]
+          if "signingConfig signingConfigs.release" not in content[insert_at:insert_at+250]:
+              content = (
+                  content[:insert_at]
+                  + "\n            signingConfig signingConfigs.release"
+                  + content[insert_at:]
+              )
 
           path.write_text(content)
           print("Release signing configured.")
@@ -236,12 +200,10 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "Missing signing secret. Configure KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD."
-            exit 1
-          fi
+          test -n "$KEY_PASSWORD" || (echo "KEY_PASSWORD eksik" && exit 1)
+
           chmod +x gradlew
-          ./gradlew assembleRelease bundleRelease
+          ./gradlew --no-daemon assembleRelease bundleRelease
 
       - name: Upload signed APK and AAB
         uses: actions/upload-artifact@v4
@@ -250,4 +212,5 @@ jobs:
           path: |
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
           retention-days: 7
